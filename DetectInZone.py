@@ -1,9 +1,8 @@
 import streamlit as st
 import numpy as np
-import time
-import os
-os.system("pip install opencv-python-headless==4.5.5.64")
 import cv2
+import time
+
 
 # Inicialización de Streamlit
 st.title("Intrusion Detection")
@@ -112,4 +111,3 @@ while cap.isOpened():
 
 cap.release()
 cv2.destroyAllWindows()
-
