@@ -1,7 +1,7 @@
+import streamlit as st
 import cv2
 import numpy as np
 import time
-import streamlit as st
 
 # Inicialización de Streamlit
 st.title("Intrusion Detection")
