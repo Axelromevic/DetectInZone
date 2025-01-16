@@ -3,6 +3,7 @@ import numpy as np
 import time
 import os
 os.system("pip install opencv-python-headless==4.5.5.64")
+import cv2
 
 # Inicialización de Streamlit
 st.title("Intrusion Detection")
