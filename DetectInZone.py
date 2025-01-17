@@ -1,106 +1,49 @@
 import streamlit as st
-import imageio
-import cv2
 import numpy as np
-import time
+import cv2
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 
-# Initialize Streamlit
-st.title("Intrusion Detection")
-st.sidebar.title("Controls")
+# Clase para procesar los frames del video
+class IntrusionDetectionTransformer(VideoTransformerBase):
+    def __init__(self):
+        self.fgbg = cv2.bgsegm.createBackgroundSubtractorMOG()
+        self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        self.intrusion_count = 0
 
-# Control buttons
-pause = st.sidebar.button("Pause/Play")
-quit_app = st.sidebar.button("Close")
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
 
-# Persistent state
-if 'pause_flag' not in st.session_state:
-    st.session_state.pause_flag = False
-if 'intrusion_count' not in st.session_state:
-    st.session_state.intrusion_count = 0
-if 'frame_pos' not in st.session_state:
-    st.session_state.frame_pos = 0
-if 'last_frame' not in st.session_state:
-    st.session_state.last_frame = None  # To store the last visible frame
-if 'active_centroids' not in st.session_state:
-    st.session_state.active_centroids = []  # To store active centroids
+        # Procesamiento del frame
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        area_pts = np.array([[240, 320], [480, 320], [640, img.shape[0]], [50, img.shape[0]]])
+        imAux = np.zeros_like(gray)
+        cv2.drawContours(imAux, [area_pts], -1, (255), -1)
+        image_area = cv2.bitwise_and(gray, gray, mask=imAux)
 
-# Pause/Play button
-if pause:
-    st.session_state.pause_flag = not st.session_state.pause_flag
+        # Detector de movimiento
+        fgmask = self.fgbg.apply(image_area)
+        fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_OPEN, self.kernel)
+        fgmask = cv2.dilate(fgmask, None, iterations=2)
 
-# Close app
-if quit_app:
-    st.stop()
+        # Detección de intrusión
+        cnts, _ = cv2.findContours(fgmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in cnts:
+            if cv2.contourArea(cnt) > 500:
+                x, y, w, h = cv2.boundingRect(cnt)
+                cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                self.intrusion_count += 1
 
-# Load video using imageio
-video_path = 'aeropuerto.mp4'
-video = imageio.get_reader(video_path)
+        # Mostrar el contador de intrusiones
+        intrusion_text = f"Intrusion: {self.intrusion_count}"
+        cv2.putText(img, intrusion_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-# Background subtractor
-fgbg = cv2.bgsegm.createBackgroundSubtractorMOG()
-kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-frame_container = st.empty()
-start_time = time.time() - st.session_state.frame_pos / video.get_meta_data()['fps']
+        return img
 
-for frame_number, frame in enumerate(video):
-    # Skip frames if paused
-    if st.session_state.pause_flag:
-        if st.session_state.last_frame is not None:
-            frame_container.image(st.session_state.last_frame, channels="RGB", use_column_width=True)
-        time.sleep(0.1)
-        continue
+# Interfaz de usuario con Streamlit
+st.title("Intrusion Detection with Streamlit WebRTC")
 
-    # Update frame position
-    st.session_state.frame_pos = frame_number
+st.write("Este proyecto detecta intrusiones en un área específica usando Streamlit WebRTC.")
 
-    # Convert frame to grayscale
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    area_pts = np.array([[240, 320], [480, 320], [640, frame.shape[0]], [50, frame.shape[0]]])
-    imAux = np.zeros_like(gray)
-    cv2.drawContours(imAux, [area_pts], -1, (255), -1)
-    image_area = cv2.bitwise_and(gray, gray, mask=imAux)
-
-    # Motion detector
-    fgmask = fgbg.apply(image_area)
-    fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_OPEN, kernel)
-    fgmask = cv2.dilate(fgmask, None, iterations=2)
-
-    # Intrusion detection
-    new_centroids = []
-    cnts, _ = cv2.findContours(fgmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    for cnt in cnts:
-        if cv2.contourArea(cnt) > 500:
-            x, y, w, h = cv2.boundingRect(cnt)
-            cx, cy = x + w // 2, y + h // 2
-            new_centroids.append((cx, cy))
-
-            # Increment counter if it's a new centroid
-            if all(np.linalg.norm(np.array((cx, cy)) - np.array(active)) > 30 for active in st.session_state.active_centroids):
-                st.session_state.intrusion_count += 1
-
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-    # Update active centroids
-    st.session_state.active_centroids = new_centroids
-
-    # Change area contour color
-    color_area = (0, 0, 255) if len(new_centroids) > 0 else (0, 255, 0)
-    cv2.drawContours(frame, [area_pts], -1, color_area, 2)
-
-    # Time and intrusion counter
-    elapsed_time = int(st.session_state.frame_pos / video.get_meta_data()['fps'])
-    hours, remainder = divmod(elapsed_time, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    time_text = f"Time: {hours:02}:{minutes:02}:{seconds:02}"
-    cv2.putText(frame, time_text, (frame.shape[1] - 250, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-    intrusion_text = f"Intrusion: {st.session_state.intrusion_count}"
-    cv2.putText(frame, intrusion_text, (frame.shape[1] - 250, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-    # Convert frame to RGB and display in Streamlit
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    st.session_state.last_frame = frame  # Store the last visible frame
-    frame_container.image(frame, channels="RGB", use_column_width=True)
-
-video.close()
+# Inicializar el streamer
+webrtc_streamer(key="intrusion-detection", video_transformer_factory=IntrusionDetectionTransformer)
